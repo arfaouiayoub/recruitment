@@ -16,6 +16,8 @@ typedef struct _CustomData
   GtkWidget *main_window; /* The uppermost window, containing all other windows */
   GstState state;         /* Current state of the pipeline */
   gint64 duration;        /* Duration of the clip, in nanoseconds */
+  gint64 position;        /* Position of the clip, in nanoseconds */
+  gint timer_id;          /* The ID of the timer source witch updates the current position */
 } CustomData;
 
 /* Enumerates label types */
@@ -58,7 +60,7 @@ static gchar *time_to_string(gint64 time)
 /* This function makes label text for a specific label type
  * The returned string should be freed with g_free() when no longer needed.
 */
-gchar *make_label_txt(enum label_type type, gchar *duration)
+static gchar *make_label_txt(enum label_type type, gchar *duration)
 {
   switch (type)
   {
@@ -72,6 +74,25 @@ gchar *make_label_txt(enum label_type type, gchar *duration)
     g_error("Cannot make label text: unknow label type");
     return g_strdup("");
   }
+}
+
+/* This function sets a given label */
+static void set_label_txt(GtkWidget *label, enum label_type type, CustomData *data) {
+  g_return_if_fail(label != NULL);
+  g_return_if_fail(data != NULL);
+  g_return_if_fail(type < LABEL_TYPE_COUNT);
+
+  gint64 time;
+  if (type == LABEL_TYPE_DURATION)
+    time =  data->duration;
+  else
+    time =  data->position;
+
+  gchar *time_str = time_to_string(time);
+  gchar *label_txt = make_label_txt(type, time_str);
+  gtk_label_set_text(GTK_LABEL(label), label_txt);
+  g_free(time_str);
+  g_free(label_txt);
 }
 
 /* Function to update a specific label */
@@ -97,11 +118,7 @@ static void update_label(CustomData *data, enum label_type type)
       GtkWidget *control = (GtkWidget *)(it->data);
       if (g_strcmp0(gtk_widget_get_name(control), label_type_to_string(type)) == 0)
       {
-        gchar *time_str = time_to_string(data->duration);
-        gchar *label_txt = make_label_txt(type, time_str);
-        gtk_label_set_text(GTK_LABEL(control), label_txt);
-        g_free(time_str);
-        g_free(label_txt);
+        set_label_txt(control, type, data);
         break;
       }
     }
@@ -190,8 +207,7 @@ static void create_ui(CustomData *data)
   GtkWidget *controls;                                               /* HBox to hold the buttons and the slider */
   GtkWidget *play_button, *pause_button, *stop_button, *open_button; /* Buttons */
   GtkWidget *duration;                                               /* Duration label */
-  gchar *time_str = NULL;
-  gchar *label_txt = NULL;
+  GtkWidget *position;                                               /* Position label */
 
   data->main_window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
   g_signal_connect(G_OBJECT(data->main_window), "delete-event", G_CALLBACK(delete_event_cb), data);
@@ -211,12 +227,13 @@ static void create_ui(CustomData *data)
   open_button = gtk_button_new_from_icon_name("gtk-open", GTK_ICON_SIZE_SMALL_TOOLBAR);
   g_signal_connect(G_OBJECT(open_button), "clicked", G_CALLBACK(open_cb), data);
 
-  time_str = time_to_string(data->duration);
-  label_txt = make_label_txt(LABEL_TYPE_DURATION, time_str);
-  duration = gtk_label_new(label_txt);
+  position = gtk_label_new(NULL);
+  gtk_widget_set_name(position, "position");
+  set_label_txt(position, LABEL_TYPE_POSITION, data);
+
+  duration = gtk_label_new(NULL);
   gtk_widget_set_name(duration, "duration");
-  g_free(time_str);
-  g_free(label_txt);
+  set_label_txt(duration, LABEL_TYPE_DURATION, data);
 
   controls = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
   gtk_widget_set_name(controls, "controls");
@@ -224,6 +241,7 @@ static void create_ui(CustomData *data)
   gtk_box_pack_start(GTK_BOX(controls), pause_button, FALSE, FALSE, 2);
   gtk_box_pack_start(GTK_BOX(controls), stop_button, FALSE, FALSE, 2);
   gtk_box_pack_start(GTK_BOX(controls), open_button, FALSE, FALSE, 2);
+  gtk_box_pack_start(GTK_BOX(controls), position, FALSE, FALSE, 2);
   gtk_box_pack_start(GTK_BOX(controls), duration, FALSE, FALSE, 2);
 
   main_hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
@@ -262,6 +280,23 @@ static void eos_cb(GstBus *bus, GstMessage *msg, CustomData *data)
 {
   g_print("End-Of-Stream reached.\n");
   gst_element_set_state(data->playbin, GST_STATE_READY);
+
+  data->position = data->duration;
+  update_label(data, LABEL_TYPE_POSITION);
+}
+
+static gboolean timer_src_func(CustomData *data) {
+  g_return_val_if_fail(data != NULL, G_SOURCE_REMOVE);
+
+  gst_element_query_position(data->playbin, GST_FORMAT_TIME, &data->position);
+
+  if (data->position != data->duration) {
+    update_label(data, LABEL_TYPE_POSITION);
+    return TRUE;
+  }
+
+  data->timer_id = -1;
+  return G_SOURCE_REMOVE;
 }
 
 /* This function is called when the pipeline changes states. We use it to
@@ -277,8 +312,18 @@ static void state_changed_cb(GstBus *bus, GstMessage *msg, CustomData *data)
     g_print("State set to %s\n", gst_element_state_get_name(new_state));
     if (new_state == GST_STATE_PLAYING)
     {
+      /* Add timer to update current position every 20 ms */
+      data->timer_id = g_timeout_add(20, (GSourceFunc) timer_src_func, data);
+
       gst_element_query_duration(data->playbin, GST_FORMAT_TIME, &data->duration);
       update_label(data, LABEL_TYPE_DURATION);
+
+    }
+    else if (new_state == GST_STATE_PAUSED)
+    {
+      /* Remove timer to avoid updating current position */
+      if (data->timer_id > 0)
+        g_source_remove(data->timer_id);
     }
   }
 }
@@ -299,6 +344,8 @@ int main(int argc, char *argv[])
   /* Initialize our data structure */
   memset(&data, 0, sizeof(data));
   data.duration = GST_CLOCK_TIME_NONE;
+  data.position = GST_CLOCK_TIME_NONE;
+  data.timer_id = -1;
 
   /* Create the elements */
   data.playbin = gst_element_factory_make("playbin", "playbin");
