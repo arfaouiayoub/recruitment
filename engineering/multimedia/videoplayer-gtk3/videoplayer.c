@@ -23,9 +23,9 @@ typedef struct _CustomData
 /* Enumerates widget types */
 enum widget_type
 {
-  WIDGET_TYPE_DURATION, /* Duration label */
-  WIDGET_TYPE_POSITION, /* Position label */
-  WIDGET_TYPE_SCALE,    /* Scale widget*/
+  WIDGET_TYPE_DURATION, /* Duration label widget */
+  WIDGET_TYPE_POSITION, /* Position label widget */
+  WIDGET_TYPE_SCALE,    /* Scale widget */
 
   WIDGET_TYPE_COUNT
 };
@@ -33,7 +33,8 @@ enum widget_type
 static const gchar *widget_type_strings[] = {
     [WIDGET_TYPE_DURATION] = "duration",
     [WIDGET_TYPE_POSITION] = "position",
-    [WIDGET_TYPE_SCALE]    = "scale"};
+    [WIDGET_TYPE_SCALE]    = "scale"
+  };
 
 /* This function converts widget type to string */
 static const gchar *widget_type_to_string(enum widget_type type)
@@ -59,7 +60,7 @@ static gchar *time_to_string(gint64 time)
   return res;
 }
 
-/* This function makes label text for a specific label type
+/* This function makes label text for a specific widget type
  * The returned string should be freed with g_free() when no longer needed.
 */
 static gchar *make_label_txt(enum widget_type type, gchar *duration)
@@ -78,7 +79,7 @@ static gchar *make_label_txt(enum widget_type type, gchar *duration)
   }
 }
 
-/* This function sets a given label widget */
+/* This function sets a given widget */
 static void set_label_txt(GtkWidget *label, enum widget_type type, CustomData *data) {
   g_return_if_fail(label != NULL);
   g_return_if_fail(data != NULL);
@@ -212,11 +213,9 @@ static void scale_cb(GtkRange *scale, GtkScrollType scroll, gdouble value, Custo
     return;
   }
 
-  gint64 time_nanoseconds = value * data->duration;
-
-  if (!gst_element_seek (data->playbin, 1.0, GST_FORMAT_TIME, GST_SEEK_FLAG_FLUSH,
-        GST_SEEK_TYPE_SET, time_nanoseconds,
-        GST_SEEK_TYPE_NONE, GST_CLOCK_TIME_NONE))
+  gint64 position = value * data->duration;
+  if (!gst_element_seek_simple (data->playbin, GST_FORMAT_TIME,
+      GST_SEEK_FLAG_KEY_UNIT | GST_SEEK_FLAG_FLUSH, position))
     g_printerr("Seek failed ! \n");
 }
 
@@ -230,7 +229,7 @@ static void create_ui(CustomData *data)
   GtkWidget *play_button, *pause_button, *stop_button, *open_button; /* Buttons */
   GtkWidget *duration;                                               /* Duration label */
   GtkWidget *position;                                               /* Position label */
-  GtkWidget *scale;                                                  /* Scale label */
+  GtkWidget *scale;                                                  /* Scale widget */
 
   data->main_window = gtk_window_new(GTK_WINDOW_TOPLEVEL);
   g_signal_connect(G_OBJECT(data->main_window), "delete-event", G_CALLBACK(delete_event_cb), data);
